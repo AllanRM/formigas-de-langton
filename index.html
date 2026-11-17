@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Formigas de Langton — Painel de LED</title>
+<!--
+  Formigas de Langton — Painel de LED
+  ------------------------------------
+  Simulação da "Formiga de Langton", autômato celular criado por
+  Chris Langton em 1986, aqui representado como um painel de LEDs.
+
+  Regras (para cada formiga, a cada passo):
+    1. LED apagado -> a formiga vira 90° à direita e ACENDE o LED.
+    2. LED aceso   -> a formiga vira 90° à esquerda e APAGA o LED.
+    3. A formiga avança uma casa na direção atual.
+
+  O mapa é toroidal: ao sair por uma borda, a formiga reaparece na oposta.
+  Arquivo único, sem dependências: basta abrir no navegador.
+-->
+<style>
+  body { margin:0; background:#050505; color:#ccc; font-family:sans-serif; }
+  header { text-align:center; padding:10px 20px 0; }
+  h1 { margin:6px 0; color:#3f3; font-weight:normal; }
+  .controles { text-align:center; margin:8px 0; }
+  .controles button, .controles input, .controles select { margin:4px; }
+  canvas { display:block; margin:10px auto; background:#000; max-width:100%; }
+  details { max-width:900px; margin:0 auto 30px; padding:0 20px; line-height:1.5; }
+  summary { cursor:pointer; color:#3f3; font-size:1.1em; }
+  a { color:#6cf; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Formigas de Langton — Painel de LED</h1>
+  <p>Regras simplíssimas, comportamento surpreendentemente complexo.</p>
+</header>
+
+<!-- ===== Controles da simulação ===== -->
+<div class="controles">
+  Formigas: <input id="qtd" type="number" min="1" max="50" value="1" style="width:50px">
+  Posição:
+  <select id="modo">
+    <option value="centro">Centro</option>
+    <option value="distribuida">Distribuída</option>
+    <option value="aleatoria">Aleatória</option>
+  </select>
+  <button id="reset">Aplicar / Reiniciar</button>
+  <button id="play">Pausar</button>
+  Velocidade: <input id="speed" type="range" min="1" max="500" value="20">
+  Passos: <span id="steps">0</span>
+</div>
+
+<canvas id="c"></canvas>
+
+<!-- ===== Descrição do projeto para o usuário ===== -->
+<details open>
+  <summary>Sobre o projeto</summary>
+
+  <h3>O que é</h3>
+  <p>A <strong>Formiga de Langton</strong> é um autômato celular: um sistema em que
+  regras locais muito simples, aplicadas repetidamente, geram padrões globais complexos.
+  Foi criada pelo pesquisador <strong>Christopher Langton</strong> em <strong>1986</strong>,
+  um dos fundadores da área de <em>Vida Artificial</em>.</p>
+
+  <h3>As regras</h3>
+  <ul>
+    <li>Se a formiga está sobre um LED <strong>apagado</strong>: vira 90° à direita e o acende.</li>
+    <li>Se está sobre um LED <strong>aceso</strong>: vira 90° à esquerda e o apaga.</li>
+    <li>Em seguida, avança uma casa.</li>
+  </ul>
+
+  <h3>O que observar</h3>
+  <p>Com uma formiga partindo do centro, o comportamento passa por três fases:</p>
+  <ol>
+    <li><strong>Simetria:</strong> nas primeiras centenas de passos surgem padrões simples e simétricos.</li>
+    <li><strong>Caos:</strong> por cerca de 10 mil passos, o desenho parece totalmente aleatório.</li>
+    <li><strong>Estrada:</strong> de repente a formiga entra num ciclo periódico de 104 passos e constrói
+    uma "estrada" diagonal que se repete indefinidamente.</li>
+  </ol>
+  <p>Nunca se provou que toda configuração inicial leva à estrada; é um problema em aberto.</p>
+
+  <h3>Nesta versão</h3>
+  <ul>
+    <li>Painel de 300 × 200 LEDs.</li>
+    <li>Várias formigas simultâneas, cada uma com uma cor única (nunca se repetem):
+    o LED aceso mostra a cor de quem o acendeu, permitindo acompanhar as interações.</li>
+    <li>Posição inicial: centro, distribuída uniformemente ou aleatória (com direção sorteada).</li>
+    <li>As formigas aparecem como quadradinhos brancos. As bordas se conectam (mapa toroidal).</li>
+    <li>Desenho incremental: só os LEDs que mudam são redesenhados, mantendo a animação leve.</li>
+  </ul>
+
+  <h3>Créditos</h3>
+  <p>Conceito original: Christopher G. Langton, 1986.
+  Saiba mais na <a href="https://pt.wikipedia.org/wiki/Formiga_de_Langton" target="_blank">Wikipédia</a>.</p>
+</details>
+
+<script>
+// ===================== Configuração =====================
+const CELL = 4;    // tamanho de cada LED em pixels
+const COLS = 300;  // LEDs na horizontal
+const ROWS = 200;  // LEDs na vertical
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+canvas.width = COLS * CELL;
+canvas.height = ROWS * CELL;
+
+// Direções na ordem horária: cima, direita, baixo, esquerda.
+// Virar à direita = +1; virar à esquerda = +3 (equivale a -1 em módulo 4).
+const DIRS = [[0,-1],[1,0],[0,1],[-1,0]];
+const COR_APAGADO = '#151515';
+
+let grid;                // estado dos LEDs: 0 = apagado, n = aceso pela formiga n-1
+let ants;                // lista de formigas {x, y, d (direção), cor}
+let steps;               // contador de passos
+let running = true;      // simulação rodando ou pausada
+const sujos = new Set(); // células que mudaram e precisam ser redesenhadas
+
+// ===================== Inicialização =====================
+
+/**
+ * Gera 'qtd' cores garantidamente distintas.
+ * Parte de um matiz aleatório e avança pelo "ângulo de ouro" (~137,5°),
+ * o que espalha as cores pelo círculo cromático sem nunca repetir.
+ * O brilho alterna entre 3 níveis para diferenciar ainda mais
+ * quando há muitas formigas.
+ */
+function gerarCores(qtd) {
+  const inicio = Math.random() * 360;
+  const ANGULO_OURO = 137.508;
+  const brilhos = [55, 70, 42];
+  const cores = [];
+  for (let i = 0; i < qtd; i++) {
+    const matiz = (inicio + i * ANGULO_OURO) % 360;
+    cores.push(`hsl(${matiz.toFixed(1)}, 100%, ${brilhos[i % 3]}%)`);
+  }
+  return cores;
+}
+
+/**
+ * Calcula as posições iniciais das formigas.
+ * @param {number} qtd  quantidade de formigas
+ * @param {string} modo 'centro' | 'distribuida' | 'aleatoria'
+ * @returns {Array<[number, number]>} lista de coordenadas [x, y]
+ */
+function posicoes(qtd, modo) {
+  const lista = [];
+  if (modo === 'centro') {
+    // Todas no centro do painel
+    for (let i = 0; i < qtd; i++) lista.push([COLS >> 1, ROWS >> 1]);
+  } else if (modo === 'distribuida') {
+    // Grade uniforme proporcional ao formato do painel
+    const colunas = Math.ceil(Math.sqrt(qtd * COLS / ROWS));
+    const linhas = Math.ceil(qtd / colunas);
+    for (let i = 0; i < qtd; i++) {
+      const cx = i % colunas, cy = Math.floor(i / colunas);
+      lista.push([
+        Math.floor((cx + 0.5) * COLS / colunas),
+        Math.floor((cy + 0.5) * ROWS / linhas)
+      ]);
+    }
+  } else {
+    // Posições totalmente aleatórias
+    for (let i = 0; i < qtd; i++)
+      lista.push([Math.floor(Math.random() * COLS), Math.floor(Math.random() * ROWS)]);
+  }
+  return lista;
+}
+
+/** Lê os parâmetros da interface e reinicia a simulação. */
+function reset() {
+  const qtd = Math.max(1, +document.getElementById('qtd').value || 1);
+  const modo = document.getElementById('modo').value;
+  grid = new Int16Array(COLS * ROWS); // todos os LEDs apagados
+  const cores = gerarCores(qtd);      // uma cor única por formiga
+  ants = posicoes(qtd, modo).map(([x, y], i) => ({
+    x, y,
+    // No centro todas começam para cima (comportamento clássico);
+    // nos outros modos a direção inicial é sorteada.
+    d: modo === 'centro' ? 0 : Math.floor(Math.random() * 4),
+    cor: cores[i]
+  }));
+  steps = 0;
+  sujos.clear();
+  desenharTudo(); // único desenho completo; depois só o que muda
+}
+
+// ===================== Lógica do autômato =====================
+
+/** Executa um passo para todas as formigas e marca as células alteradas. */
+function step() {
+  ants.forEach((a, idx) => {
+    const i = a.y * COLS + a.x;
+    if (grid[i] === 0) {
+      a.d = (a.d + 1) % 4;  // apagado: vira à direita...
+      grid[i] = idx + 1;    // ...e acende com a cor desta formiga
+    } else {
+      a.d = (a.d + 3) % 4;  // aceso: vira à esquerda...
+      grid[i] = 0;          // ...e apaga
+    }
+    sujos.add(i); // a célula mudou de estado
+    // Avança uma casa; o módulo faz as bordas se conectarem
+    a.x = (a.x + DIRS[a.d][0] + COLS) % COLS;
+    a.y = (a.y + DIRS[a.d][1] + ROWS) % ROWS;
+  });
+  steps++;
+}
+
+// ===================== Desenho =====================
+// Otimização: em vez de redesenhar os 60 mil LEDs a cada quadro,
+// só as células marcadas como "sujas" são repintadas.
+// O halo (shadowBlur) foi removido porque vazava para as células
+// vizinhas e é a operação mais cara do canvas.
+
+/** Pinta uma única célula: limpa o quadrado e desenha o LED. */
+function desenharCelula(i) {
+  const x = i % COLS, y = (i / COLS) | 0;
+  const v = grid[i];
+  ctx.fillStyle = '#000';
+  ctx.fillRect(x * CELL, y * CELL, CELL, CELL);
+  ctx.fillStyle = v ? ants[v - 1].cor : COR_APAGADO;
+  ctx.beginPath();
+  ctx.arc(x * CELL + CELL / 2, y * CELL + CELL / 2, CELL / 2 - 0.5, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+/** Desenha as formigas como quadradinhos brancos sobre a célula atual. */
+function desenharFormigas() {
+  ctx.fillStyle = '#fff';
+  ants.forEach(a => ctx.fillRect(a.x * CELL, a.y * CELL, CELL, CELL));
+}
+
+/** Desenho completo do painel (usado só ao reiniciar). */
+function desenharTudo() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  for (let i = 0; i < COLS * ROWS; i++) desenharCelula(i);
+  desenharFormigas();
+  document.getElementById('steps').textContent = steps;
+}
+
+/** Desenho incremental: repinta só o que mudou desde o último quadro. */
+function desenharMudancas() {
+  sujos.forEach(desenharCelula);
+  sujos.clear();
+  desenharFormigas();
+  document.getElementById('steps').textContent = steps;
+}
+
+// ===================== Laço principal =====================
+
+/** A cada quadro, executa N passos e redesenha apenas as mudanças. */
+function loop() {
+  if (running) {
+    // Marca a posição atual das formigas para apagar o quadradinho branco antigo
+    ants.forEach(a => sujos.add(a.y * COLS + a.x));
+    const n = +document.getElementById('speed').value;
+    for (let k = 0; k < n; k++) step();
+    desenharMudancas();
+  }
+  requestAnimationFrame(loop);
+}
+
+// ===================== Eventos da interface =====================
+document.getElementById('play').onclick = e => {
+  running = !running;
+  e.target.textContent = running ? 'Pausar' : 'Continuar';
+};
+document.getElementById('reset').onclick = reset;
+
+reset();
+loop();
+</script>
+</body>
+</html>
