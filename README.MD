@@ -4,7 +4,7 @@ Simulação da **Formiga de Langton** rodando direto no navegador, representada 
 
 Regras simplíssimas, comportamento surpreendentemente complexo.
 
-> 🔗 **Demo:** `https://github.com/AllanRM/formigas-de-langton/`
+> 🔗 **Demo:** `https://allanrm.github.io/formigas-de-langton/`
 
 ---
 
